@@ -1,0 +1,46 @@
+version: '3.9'
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: goldencommerce
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  mongodb:
+    image: mongo:6
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: password
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  auth-service:
+    build: ./minha-loja/auth-service
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/goldencommerce
+      SECRET_KEY: mysecretkey123
+      ALGORITHM: HS256
+    depends_on:
+      - postgres
+
+  product-service:
+    build: ./minha-loja/product-service
+    ports:
+      - "8002:8000"
+    environment:
+      DATABASE_URL: postgresql://user:password@postgres:5432/goldencommerce
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
+  mongodb_data:
