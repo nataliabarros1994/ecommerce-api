@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ecommerce_postgres
+    environment:
+      POSTGRES_USER: ecommerce
+      POSTGRES_PASSWORD: ecommerce123
+      POSTGRES_DB: ecommerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - ecommerce_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB Database
+  mongodb:
+    image: mongo:7
+    container_name: ecommerce_mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ecommerce
+      MONGO_INITDB_ROOT_PASSWORD: ecommerce123
+      MONGO_INITDB_DATABASE: ecommerce_products
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - ecommerce_network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:alpine
+    container_name: ecommerce_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - ecommerce_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Auth Service
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: auth_service
+    environment:
+      - DATABASE_URL=postgresql://ecommerce:ecommerce123@postgres:5432/ecommerce
+      - SECRET_KEY=your-secret-key-change-in-production
+      - REDIS_URL=redis://redis:6379
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ecommerce_network
+    volumes:
+      - ./auth-service:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Product Service
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    container_name: product_service
+    environment:
+      - MONGODB_URL=mongodb://ecommerce:ecommerce123@mongodb:27017/
+      - MONGODB_DB=ecommerce_products
+      - SECRET_KEY=your-secret-key-change-in-production
+    ports:
+      - "8002:8000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - ecommerce_network
+    volumes:
+      - ./product-service:/app
+      - ./shared:/app/shared
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Order Service
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order_service
+    environment:
+      - DATABASE_URL=postgresql://ecommerce:ecommerce123@postgres:5432/ecommerce
+      - SECRET_KEY=your-secret-key-change-in-production
+      - PRODUCT_SERVICE_URL=http://product-service:8000
+      - PAYMENT_SERVICE_URL=http://payment-service:8000
+    ports:
+      - "8003:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ecommerce_network
+    volumes:
+      - ./order-service:/app
+      - ./shared:/app/shared
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Payment Service
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    container_name: payment_service
+    environment:
+      - DATABASE_URL=postgresql://ecommerce:ecommerce123@postgres:5432/ecommerce
+      - SECRET_KEY=your-secret-key-change-in-production
+    ports:
+      - "8004:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ecommerce_network
+    volumes:
+      - ./payment-service:/app
+      - ./shared:/app/shared
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Dashboard Service
+  dashboard-service:
+    build:
+      context: ./dashboard-service
+      dockerfile: Dockerfile
+    container_name: dashboard_service
+    environment:
+      - DATABASE_URL=postgresql://ecommerce:ecommerce123@postgres:5432/ecommerce
+      - MONGODB_URL=mongodb://ecommerce:ecommerce123@mongodb:27017/
+      - MONGODB_DB=ecommerce_products
+      - SECRET_KEY=your-secret-key-change-in-production
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - PRODUCT_SERVICE_URL=http://product-service:8000
+      - ORDER_SERVICE_URL=http://order-service:8000
+    ports:
+      - "8005:8000"
+    depends_on:
+      - postgres
+      - mongodb
+      - auth-service
+    networks:
+      - ecommerce_network
+    volumes:
+      - ./dashboard-service:/app
+      - ./shared:/app/shared
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+networks:
+  ecommerce_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mongodb_data:
